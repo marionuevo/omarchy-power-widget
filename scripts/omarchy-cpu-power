@@ -1,0 +1,6 @@
+#!/bin/bash
+# Prints instantaneous CPU package power draw in watts. Delegates the actual
+# RAPL read to omarchy-cpu-power-helper, a small compiled binary carrying
+# cap_dac_read_search (via setcap) so it alone can read the root-only
+# intel-rapl energy_uj counters — narrower than making them world-readable.
+exec "$(dirname "$(readlink -f "$0")")/omarchy-cpu-power-helper"

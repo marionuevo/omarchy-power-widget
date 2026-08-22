@@ -1,0 +1,5 @@
+#!/bin/bash
+# Prints the average current CPU frequency across all logical cores, in MHz.
+# scaling_cur_freq is world-readable, no elevated privilege needed.
+awk '{ sum += $1; n++ } END { if (n > 0) printf "%.0f\n", sum / n / 1000; else print "0" }' \
+  /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq 2>/dev/null || echo "0"

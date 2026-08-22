@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "marionuevo.power",
+  "name": "Power",
+  "version": "1.0.0",
+  "author": "marionuevo",
+  "description": "Live CPU power draw on the bar; click for the power-profile picker and session power stats",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Power",
+    "description": "Live CPU power draw on the bar; click for the power-profile picker and session power stats",
+    "category": "System",
+    "allowMultiple": false
+  },
+  "omarchy": {
+    "clonedFrom": "omarchy.power"
+  }
+}
