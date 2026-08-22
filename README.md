@@ -1,8 +1,10 @@
-# marionuevo.power
+# omarchy-power-widget
 
 [![License: MIT](https://img.shields.io/github/license/marionuevo/omarchy-power-widget)](LICENSE)
 [![Omarchy](https://img.shields.io/badge/omarchy-plugin-blue)](https://omarchy.org/)
 [![Bar widget](https://img.shields.io/badge/kind-bar--widget-informational)](manifest.json)
+
+Plugin id: `marionuevo.power` (see `manifest.json`).
 
 Omarchy bar widget for desktops (no battery). Bar icon shows live CPU
 package power draw (watts, via Intel RAPL); click it for the power-profile
