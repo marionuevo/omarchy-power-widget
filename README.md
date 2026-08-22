@@ -17,6 +17,8 @@ Cloned from the built-in `omarchy.power` panel and stripped of everything
 battery-specific (it hides itself entirely on hardware with no battery,
 since it's gated on `UPower.displayDevice.isPresent`).
 
+![Popup: power-profile picker on top, CPU power/frequency and session stats below](screenshot.png)
+
 ## Runtime dependencies
 
 `Panel.qml` shells out to two commands that must be on `PATH`
