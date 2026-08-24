@@ -31,7 +31,23 @@ Panel {
   property real pl2Watts: 0
   property real mhz: 0
 
+  // ---- GPU power draw (NVIDIA, via nvidia-smi - see omarchy-gpu-power) ----
+  // gpuPresent stays false on machines with no NVIDIA GPU, which hides every
+  // GPU element rather than showing a dead "—".
+  property bool gpuPresent: false
+  property bool gpuLoaded: false
+  property real gpuWatts: 0
+  property real gpuMhz: 0
+  property real gpuLimitWatts: 0
+  property string gpuPstate: ""
+  property real gpuUtil: 0
+  property real gpuSampleCount: 0
+  property real gpuSumWatts: 0
+  property real gpuMinWatts: -1
+  property real gpuMaxWatts: -1
+
   readonly property real avgWatts: sampleCount > 0 ? sumWatts / sampleCount : 0
+  readonly property real gpuAvgWatts: gpuSampleCount > 0 ? gpuSumWatts / gpuSampleCount : 0
 
   // Alert level, driven purely by proximity to this CPU's own RAPL limits —
   // no color coding (theme colors only). 1 = near sustained limit
@@ -64,6 +80,7 @@ Panel {
     if (!profilesProc.running) profilesProc.running = true
     if (!powerProc.running) powerProc.running = true
     if (!freqProc.running) freqProc.running = true
+    if (!gpuProc.running) gpuProc.running = true
   }
 
   function updateProfiles(raw) {
@@ -111,9 +128,39 @@ Panel {
     mhz = v
   }
 
-  readonly property string tooltipText: !loaded
-    ? "CPU power draw\nClick for power modes & stats"
-    : "CPU: " + watts.toFixed(1) + " W · " + profileLabel(activeProfile) + "\nClick for power modes & stats"
+  // "watts,sm_mhz,limit_watts,pstate,util" — empty output means no GPU.
+  function parseGpu(raw) {
+    var line = String(raw || "").trim()
+    if (line === "") return
+    var f = line.split(",")
+    if (f.length < 5) return
+    var w = parseFloat(f[0])
+    if (isNaN(w) || w <= 0) return
+
+    gpuPresent = true
+    gpuLoaded = true
+    gpuWatts = w
+    gpuSampleCount += 1
+    gpuSumWatts += w
+    if (gpuMinWatts < 0 || w < gpuMinWatts) gpuMinWatts = w
+    if (w > gpuMaxWatts) gpuMaxWatts = w
+
+    var m = parseFloat(f[1])
+    if (!isNaN(m) && m > 0) gpuMhz = m
+    var lim = parseFloat(f[2])
+    if (!isNaN(lim) && lim > 0) gpuLimitWatts = lim
+    gpuPstate = f[3]
+    var u = parseFloat(f[4])
+    if (!isNaN(u)) gpuUtil = u
+  }
+
+  readonly property string tooltipText: {
+    if (!loaded) return "CPU power draw\nClick for power modes & stats"
+    var t = "CPU: " + watts.toFixed(1) + " W · " + profileLabel(activeProfile)
+    if (gpuPresent && gpuLoaded)
+      t += "\nGPU: " + gpuWatts.toFixed(1) + " W · " + gpuPstate + " · " + gpuUtil.toFixed(0) + "%"
+    return t + "\nClick for power modes & stats"
+  }
 
   IpcHandler {
     target: "marionuevo.power"
@@ -155,6 +202,12 @@ Panel {
     id: freqProc
     command: ["omarchy-cpu-freq"]
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.parseFreq(text) }
+  }
+
+  Process {
+    id: gpuProc
+    command: ["omarchy-gpu-power"]
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.parseGpu(text) }
   }
 
   Process {
@@ -223,26 +276,55 @@ Panel {
     Behavior on opacity { enabled: root.alertLevel < 2; NumberAnimation { duration: 200 } }
   }
 
+  // Two icon+value pairs (CPU, GPU) in one pill. The outer spacing is wider
+  // than the inner so each icon visually binds to its own number instead of
+  // the four items reading as one undifferentiated run.
   Row {
     id: pillRow
     anchors.centerIn: parent
-    spacing: Style.space(4)
+    spacing: Style.space(10)
 
-    Text {
-      anchors.verticalCenter: parent.verticalCenter
-      text: "󱐋"
-      color: root.bar ? root.bar.foreground : Color.foreground
-      font.family: root.bar ? root.bar.fontFamily : Style.font.family
-      font.pixelSize: Style.bar.iconFont
+    Row {
+      spacing: Style.space(4)
+
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        text: "󱐋"
+        color: root.bar ? root.bar.foreground : Color.foreground
+        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.pixelSize: Style.bar.iconFont
+      }
+
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        text: !root.loaded ? "…" : root.watts.toFixed(1) + "W"
+        color: root.bar ? root.bar.foreground : Color.foreground
+        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.pixelSize: Style.font.bodySmall
+        renderType: Text.NativeRendering
+      }
     }
 
-    Text {
-      anchors.verticalCenter: parent.verticalCenter
-      text: !root.loaded ? "…" : root.watts.toFixed(1) + "W"
-      color: root.bar ? root.bar.foreground : Color.foreground
-      font.family: root.bar ? root.bar.fontFamily : Style.font.family
-      font.pixelSize: Style.font.bodySmall
-      renderType: Text.NativeRendering
+    Row {
+      spacing: Style.space(4)
+      visible: root.gpuPresent
+
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        text: "󰢮"
+        color: root.bar ? root.bar.foreground : Color.foreground
+        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.pixelSize: Style.bar.iconFont
+      }
+
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        text: !root.gpuLoaded ? "…" : root.gpuWatts.toFixed(1) + "W"
+        color: root.bar ? root.bar.foreground : Color.foreground
+        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.pixelSize: Style.font.bodySmall
+        renderType: Text.NativeRendering
+      }
     }
   }
 
@@ -451,90 +533,195 @@ Panel {
           }
         }
 
+        // Same two-cell shape as the CPU row above, so the four readings line
+        // up in a 2x2 grid. Hidden entirely when there's no NVIDIA GPU.
+        Row {
+          id: gpuStatsRow
+          width: parent.width
+          spacing: Style.space(10)
+          visible: root.gpuPresent
+
+          readonly property real cellWidth: (width - spacing) / 2
+
+          Column {
+            width: gpuStatsRow.cellWidth
+            spacing: Style.space(2)
+
+            Row {
+              spacing: Style.space(6)
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "󰢮"
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.title
+              }
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "GPU Power"
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.subtitle
+                font.bold: true
+              }
+            }
+            Text {
+              text: !root.gpuLoaded ? "Loading…" : root.gpuWatts.toFixed(1) + " W"
+              color: root.bar.foreground
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          Column {
+            width: gpuStatsRow.cellWidth
+            spacing: Style.space(2)
+
+            Row {
+              spacing: Style.space(6)
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "󰐰"
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.title
+              }
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "GPU Frequency"
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.subtitle
+                font.bold: true
+              }
+            }
+            Text {
+              text: root.gpuMhz > 0
+                ? (root.gpuMhz / 1000).toFixed(2) + " GHz"
+                  + (root.gpuPstate !== "" ? " · " + root.gpuPstate : "")
+                : "Loading…"
+              color: root.bar.foreground
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+        }
+
+        // Session min/avg/max as a small table: one row per statistic, one
+        // value column per device. The GPU column collapses away when there's
+        // no GPU, leaving the original single-column layout.
         Column {
+          id: sessionTable
           width: parent.width
           spacing: Style.spacing.xs
+
+          readonly property real labelWidth: 60
+          readonly property real valueWidth: 80
+          readonly property color mutedForeground: Qt.rgba(
+            root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.6)
+
           PanelSectionHeader { foreground: root.bar.foreground; text: "THIS SESSION" }
 
           Row {
             width: parent.width
             spacing: Style.spacing.sm
+            visible: root.gpuPresent
+            Item { width: sessionTable.labelWidth; height: 1 }
             Text {
-              text: "Min"
-              color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.6)
+              text: "CPU"
+              color: sessionTable.mutedForeground
               font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
-              width: 60
+              font.bold: true
+              width: sessionTable.valueWidth
             }
             Text {
-              text: root.minWatts < 0 ? "—" : root.minWatts.toFixed(1) + " W"
-              color: root.bar.foreground
+              text: "GPU"
+              color: sessionTable.mutedForeground
               font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
-            }
-          }
-          Row {
-            width: parent.width
-            spacing: Style.spacing.sm
-            Text {
-              text: "Avg"
-              color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.6)
-              font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
-              width: 60
-            }
-            Text {
-              text: root.sampleCount === 0 ? "—" : root.avgWatts.toFixed(1) + " W"
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
+              font.bold: true
+              width: sessionTable.valueWidth
             }
           }
-          Row {
-            width: parent.width
-            spacing: Style.spacing.sm
-            Text {
-              text: "Max"
-              color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.6)
-              font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
-              width: 60
-            }
-            Text {
-              text: root.maxWatts < 0 ? "—" : root.maxWatts.toFixed(1) + " W"
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
+
+          Repeater {
+            model: [
+              { label: "Min", cpu: root.minWatts < 0 ? "—" : root.minWatts.toFixed(1) + " W",
+                gpu: root.gpuMinWatts < 0 ? "—" : root.gpuMinWatts.toFixed(1) + " W" },
+              { label: "Avg", cpu: root.sampleCount === 0 ? "—" : root.avgWatts.toFixed(1) + " W",
+                gpu: root.gpuSampleCount === 0 ? "—" : root.gpuAvgWatts.toFixed(1) + " W" },
+              { label: "Max", cpu: root.maxWatts < 0 ? "—" : root.maxWatts.toFixed(1) + " W",
+                gpu: root.gpuMaxWatts < 0 ? "—" : root.gpuMaxWatts.toFixed(1) + " W" }
+            ]
+
+            Row {
+              id: sessionRow
+              required property var modelData
+              width: sessionTable.width
+              spacing: Style.spacing.sm
+
+              Text {
+                text: sessionRow.modelData.label
+                color: sessionTable.mutedForeground
+                font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
+                width: sessionTable.labelWidth
+              }
+              Text {
+                text: sessionRow.modelData.cpu
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
+                width: sessionTable.valueWidth
+              }
+              Text {
+                text: sessionRow.modelData.gpu
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
+                width: sessionTable.valueWidth
+                visible: root.gpuPresent
+              }
             }
           }
         }
 
         Column {
+          id: limitsTable
           width: parent.width
           spacing: Style.spacing.xs
+
+          // Wide enough for the longest label ("CPU sustained (PL1)"). The
+          // labels also elide, so a longer one can never overdraw the value
+          // column the way an unbounded Text would.
+          readonly property real labelWidth: 185
+          readonly property color mutedForeground: Qt.rgba(
+            root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.6)
+
           PanelSectionHeader { foreground: root.bar.foreground; text: "LIMITS" }
-          Row {
-            width: parent.width
-            spacing: Style.spacing.sm
-            Text {
-              text: "Sustained (PL1)"
-              color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.6)
-              font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
-              width: 120
-            }
-            Text {
-              text: root.pl1Watts > 0 ? root.pl1Watts.toFixed(0) + " W" : "—"
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
-            }
-          }
-          Row {
-            width: parent.width
-            spacing: Style.spacing.sm
-            Text {
-              text: "Boost (PL2)"
-              color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.6)
-              font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
-              width: 120
-            }
-            Text {
-              text: root.pl2Watts > 0 ? root.pl2Watts.toFixed(0) + " W" : "—"
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
+
+          Repeater {
+            model: [
+              { label: "CPU sustained (PL1)", value: root.pl1Watts > 0 ? root.pl1Watts.toFixed(0) + " W" : "—", shown: true },
+              { label: "CPU boost (PL2)", value: root.pl2Watts > 0 ? root.pl2Watts.toFixed(0) + " W" : "—", shown: true },
+              { label: "GPU cap", value: root.gpuLimitWatts > 0 ? root.gpuLimitWatts.toFixed(0) + " W" : "—", shown: root.gpuPresent }
+            ]
+
+            Row {
+              id: limitRow
+              required property var modelData
+              width: limitsTable.width
+              spacing: Style.spacing.sm
+              visible: limitRow.modelData.shown
+
+              Text {
+                text: limitRow.modelData.label
+                color: limitsTable.mutedForeground
+                font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
+                width: limitsTable.labelWidth
+                elide: Text.ElideRight
+              }
+              Text {
+                text: limitRow.modelData.value
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
+              }
             }
           }
         }
