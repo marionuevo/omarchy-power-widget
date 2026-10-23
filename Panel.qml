@@ -6,7 +6,7 @@ import qs.Ui
 import "Model.js" as Model
 
 // Single bar widget: the icon shown is live CPU package power draw (watts,
-// via Intel RAPL - see omarchy-cpu-power). Clicking it opens one popup with
+// averaged between polls of Intel RAPL's counters - see omarchy-cpu-power). Clicking it opens one popup with
 // the power-profile picker on top and session power stats below.
 Panel {
   id: root
@@ -46,7 +46,24 @@ Panel {
   property real gpuMinWatts: -1
   property real gpuMaxWatts: -1
 
+  // ---- RAM power draw (RAPL "dram" zone, from the same omarchy-cpu-power
+  //      reading) ----
+  // ramPresent stays false where RAPL has no dram zone (most client CPUs),
+  // which hides every RAM element just like the GPU ones.
+  property bool ramPresent: false
+  property real ramWatts: 0
+  property real ramLimitWatts: 0
+  property real ramSampleCount: 0
+  property real ramSumWatts: 0
+  property real ramMinWatts: -1
+  property real ramMaxWatts: -1
+
+  // The previous omarchy-cpu-power reading; watts are the energy spent
+  // between it and the next one.
+  property var lastEnergy: null
+
   readonly property real avgWatts: sampleCount > 0 ? sumWatts / sampleCount : 0
+  readonly property real ramAvgWatts: ramSampleCount > 0 ? ramSumWatts / ramSampleCount : 0
   readonly property real gpuAvgWatts: gpuSampleCount > 0 ? gpuSumWatts / gpuSampleCount : 0
 
   // Alert level, driven purely by proximity to this CPU's own RAPL limits —
@@ -103,15 +120,40 @@ Panel {
     actionProc.running = true
   }
 
+  // Lines: monotonic ns, CPU energy µJ, then RAM energy µJ and RAM limit W
+  // where RAPL has a dram zone. A counter that went backwards wrapped
+  // around: that interval is skipped.
   function parseWatts(raw) {
-    var v = parseFloat(String(raw || "").trim())
-    if (isNaN(v) || v <= 0) return
+    var lines = String(raw || "").trim().split("\n")
+    var now = { t: Number(lines[0]), cpu: Number(lines[1]),
+                ram: lines.length >= 4 ? Number(lines[2]) : NaN }
+    if (!isFinite(now.t) || !isFinite(now.cpu)) return
+    var last = lastEnergy
+    lastEnergy = now
+    if (lines.length >= 4) {
+      var lim = parseFloat(lines[3])
+      ramLimitWatts = isNaN(lim) ? 0 : lim
+    }
+    if (!last || now.t <= last.t) return
+    var seconds = (now.t - last.t) / 1e9
+
+    var v = (now.cpu - last.cpu) / 1e6 / seconds
+    if (v <= 0) return
     watts = v
     loaded = true
     sampleCount += 1
     sumWatts += v
     if (minWatts < 0 || v < minWatts) minWatts = v
     if (v > maxWatts) maxWatts = v
+
+    var r = (now.ram - last.ram) / 1e6 / seconds
+    if (!isFinite(r) || r <= 0) return
+    ramPresent = true
+    ramWatts = r
+    ramSampleCount += 1
+    ramSumWatts += r
+    if (ramMinWatts < 0 || r < ramMinWatts) ramMinWatts = r
+    if (r > ramMaxWatts) ramMaxWatts = r
   }
 
   function parseLimits(raw) {
@@ -159,6 +201,8 @@ Panel {
     var t = "CPU: " + watts.toFixed(1) + " W · " + profileLabel(activeProfile)
     if (gpuPresent && gpuLoaded)
       t += "\nGPU: " + gpuWatts.toFixed(1) + " W · " + gpuPstate + " · " + gpuUtil.toFixed(0) + "%"
+    if (ramPresent)
+      t += "\nRAM: " + ramWatts.toFixed(1) + " W" + (ramLimitWatts > 0 ? " · capped at " + ramLimitWatts.toFixed(1) + " W" : "")
     return t + "\nClick for power modes & stats"
   }
 
@@ -276,7 +320,7 @@ Panel {
     Behavior on opacity { enabled: root.alertLevel < 2; NumberAnimation { duration: 200 } }
   }
 
-  // Two icon+value pairs (CPU, GPU) in one pill. The outer spacing is wider
+  // Icon+value pairs (CPU, then GPU and RAM where present) in one pill. The outer spacing is wider
   // than the inner so each icon visually binds to its own number instead of
   // the four items reading as one undifferentiated run.
   Row {
@@ -320,6 +364,28 @@ Panel {
       Text {
         anchors.verticalCenter: parent.verticalCenter
         text: !root.gpuLoaded ? "…" : root.gpuWatts.toFixed(1) + "W"
+        color: root.bar ? root.bar.foreground : Color.foreground
+        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.pixelSize: Style.font.bodySmall
+        renderType: Text.NativeRendering
+      }
+    }
+
+    Row {
+      spacing: Style.space(4)
+      visible: root.ramPresent
+
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        text: ""
+        color: root.bar ? root.bar.foreground : Color.foreground
+        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.pixelSize: Style.bar.iconFont
+      }
+
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        text: root.ramWatts.toFixed(1) + "W"
         color: root.bar ? root.bar.foreground : Color.foreground
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
         font.pixelSize: Style.font.bodySmall
@@ -607,6 +673,38 @@ Panel {
           }
         }
 
+        // RAM power on its own row. Hidden where RAPL has no dram zone.
+        Column {
+          width: parent.width
+          spacing: Style.space(2)
+          visible: root.ramPresent
+
+          Row {
+            spacing: Style.space(6)
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: ""
+              color: root.bar.foreground
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.title
+            }
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: "RAM Power"
+              color: root.bar.foreground
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.subtitle
+              font.bold: true
+            }
+          }
+          Text {
+            text: root.ramWatts.toFixed(1) + " W" + (root.ramLimitWatts > 0 ? " · capped at " + root.ramLimitWatts.toFixed(1) + " W" : "")
+            color: root.bar.foreground
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+
         // Session min/avg/max as a small table: one row per statistic, one
         // value column per device. The GPU column collapses away when there's
         // no GPU, leaving the original single-column layout.
@@ -625,7 +723,7 @@ Panel {
           Row {
             width: parent.width
             spacing: Style.spacing.sm
-            visible: root.gpuPresent
+            visible: root.gpuPresent || root.ramPresent
             Item { width: sessionTable.labelWidth; height: 1 }
             Text {
               text: "CPU"
@@ -640,17 +738,29 @@ Panel {
               font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
               font.bold: true
               width: sessionTable.valueWidth
+              visible: root.gpuPresent
+            }
+            Text {
+              text: "RAM"
+              color: sessionTable.mutedForeground
+              font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
+              font.bold: true
+              width: sessionTable.valueWidth
+              visible: root.ramPresent
             }
           }
 
           Repeater {
             model: [
               { label: "Min", cpu: root.minWatts < 0 ? "—" : root.minWatts.toFixed(1) + " W",
-                gpu: root.gpuMinWatts < 0 ? "—" : root.gpuMinWatts.toFixed(1) + " W" },
+                gpu: root.gpuMinWatts < 0 ? "—" : root.gpuMinWatts.toFixed(1) + " W",
+                ram: root.ramMinWatts < 0 ? "—" : root.ramMinWatts.toFixed(1) + " W" },
               { label: "Avg", cpu: root.sampleCount === 0 ? "—" : root.avgWatts.toFixed(1) + " W",
-                gpu: root.gpuSampleCount === 0 ? "—" : root.gpuAvgWatts.toFixed(1) + " W" },
+                gpu: root.gpuSampleCount === 0 ? "—" : root.gpuAvgWatts.toFixed(1) + " W",
+                ram: root.ramSampleCount === 0 ? "—" : root.ramAvgWatts.toFixed(1) + " W" },
               { label: "Max", cpu: root.maxWatts < 0 ? "—" : root.maxWatts.toFixed(1) + " W",
-                gpu: root.gpuMaxWatts < 0 ? "—" : root.gpuMaxWatts.toFixed(1) + " W" }
+                gpu: root.gpuMaxWatts < 0 ? "—" : root.gpuMaxWatts.toFixed(1) + " W",
+                ram: root.ramMaxWatts < 0 ? "—" : root.ramMaxWatts.toFixed(1) + " W" }
             ]
 
             Row {
@@ -678,6 +788,13 @@ Panel {
                 width: sessionTable.valueWidth
                 visible: root.gpuPresent
               }
+              Text {
+                text: sessionRow.modelData.ram
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
+                width: sessionTable.valueWidth
+                visible: root.ramPresent
+              }
             }
           }
         }
@@ -700,7 +817,9 @@ Panel {
             model: [
               { label: "CPU sustained (PL1)", value: root.pl1Watts > 0 ? root.pl1Watts.toFixed(0) + " W" : "—", shown: true },
               { label: "CPU boost (PL2)", value: root.pl2Watts > 0 ? root.pl2Watts.toFixed(0) + " W" : "—", shown: true },
-              { label: "GPU cap", value: root.gpuLimitWatts > 0 ? root.gpuLimitWatts.toFixed(0) + " W" : "—", shown: root.gpuPresent }
+              { label: "GPU cap", value: root.gpuLimitWatts > 0 ? root.gpuLimitWatts.toFixed(0) + " W" : "—", shown: root.gpuPresent },
+              // Only while some daemon (imac-fand on an iMac) has it enabled.
+              { label: "RAM cap", value: root.ramLimitWatts.toFixed(1) + " W", shown: root.ramLimitWatts > 0 }
             ]
 
             Row {

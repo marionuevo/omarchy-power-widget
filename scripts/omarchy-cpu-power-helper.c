@@ -1,6 +1,16 @@
 /*
- * omarchy-cpu-power-helper — prints instantaneous CPU package power draw in
- * watts, sampled over ~200ms via Intel RAPL.
+ * omarchy-cpu-power-helper — prints Intel RAPL's raw energy counters, for
+ * the caller to turn into watts between two calls:
+ *
+ *   line 1: CLOCK_MONOTONIC in nanoseconds, when the counters were read
+ *   line 2: CPU package energy in microjoules (summed over top-level zones)
+ *   line 3: RAM energy in microjoules           } only where RAPL has a
+ *   line 4: RAM power limit in watts (0 = none)  } "dram" zone
+ *
+ * It used to sleep 200ms between two reads and print watts. Polled every 2s
+ * by the bar, that window kept landing on the bar's own process spawns
+ * waking the CPU, so it read 15-20 W on a package averaging 7 W. Counters
+ * read at each poll give the true average over the whole interval.
  *
  * Runs with cap_dac_read_search (via setcap) so it alone can read the
  * root-only intel-rapl energy_uj counters under /sys/class/powercap,
@@ -16,6 +26,8 @@
 
 #define MAX_ZONES 16
 #define PATH_MAX_LOCAL 512
+/* Room for a zone directory plus the longest file name read inside it. */
+#define ZONE_FILE_MAX (PATH_MAX_LOCAL + 32)
 
 static int find_zones(char paths[MAX_ZONES][PATH_MAX_LOCAL]) {
     const char *base = "/sys/class/powercap";
@@ -40,6 +52,34 @@ static int find_zones(char paths[MAX_ZONES][PATH_MAX_LOCAL]) {
     return count;
 }
 
+/* The "dram" subzone ("intel-rapl:0:2" on a Haswell desktop), if any: its
+ * directory goes in dir. Returns 0 when there is none. */
+static int find_dram(char dir[PATH_MAX_LOCAL]) {
+    const char *base = "/sys/class/powercap";
+    DIR *d = opendir(base);
+    if (!d) return 0;
+
+    int found = 0;
+    struct dirent *ent;
+    while (!found && (ent = readdir(d)) != NULL) {
+        const char *name = ent->d_name;
+        if (strncmp(name, "intel-rapl:", 11) != 0) continue;
+        if (strchr(name + 11, ':') == NULL) continue;
+
+        char path[ZONE_FILE_MAX], zone[16] = "";
+        snprintf(path, sizeof path, "%s/%s/name", base, name);
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+        if (fscanf(f, "%15s", zone) == 1 && strcmp(zone, "dram") == 0) {
+            snprintf(dir, PATH_MAX_LOCAL, "%s/%s", base, name);
+            found = 1;
+        }
+        fclose(f);
+    }
+    closedir(d);
+    return found;
+}
+
 static long read_energy(const char *path) {
     FILE *f = fopen(path, "r");
     if (!f) return -1;
@@ -59,39 +99,32 @@ static long sum_energy(char paths[MAX_ZONES][PATH_MAX_LOCAL], int count) {
     return sum;
 }
 
+/* RAM power limit in watts, 0 unless the dram zone has one enabled. */
+static double dram_limit(const char *dir) {
+    char path[ZONE_FILE_MAX];
+    snprintf(path, sizeof path, "%s/enabled", dir);
+    if (read_energy(path) != 1) return 0.0;
+    snprintf(path, sizeof path, "%s/constraint_0_power_limit_uw", dir);
+    long uw = read_energy(path);
+    return uw > 0 ? uw / 1e6 : 0.0;
+}
+
 int main(void) {
     char paths[MAX_ZONES][PATH_MAX_LOCAL];
     int count = find_zones(paths);
-    if (count == 0) {
-        printf("0.0\n");
-        return 0;
-    }
+    if (count == 0) return 0;
 
-    struct timespec t1, t2;
-    long e1 = sum_energy(paths, count);
-    clock_gettime(CLOCK_MONOTONIC, &t1);
+    char dram[PATH_MAX_LOCAL], dram_energy[ZONE_FILE_MAX];
+    int has_dram = find_dram(dram);
+    if (has_dram) snprintf(dram_energy, sizeof dram_energy, "%s/energy_uj", dram);
 
-    struct timespec sleep_dur = { .tv_sec = 0, .tv_nsec = 200000000L };
-    nanosleep(&sleep_dur, NULL);
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    long cpu = sum_energy(paths, count);
+    if (cpu < 0) return 0;
 
-    long e2 = sum_energy(paths, count);
-    clock_gettime(CLOCK_MONOTONIC, &t2);
-
-    if (e1 < 0 || e2 < 0 || e2 < e1) {
-        /* Read failure or counter wraparound mid-sample; skip rather than
-         * report a garbage spike. */
-        printf("0.0\n");
-        return 0;
-    }
-
-    double delta_e_uj = (double)(e2 - e1);
-    double delta_t_s = (t2.tv_sec - t1.tv_sec) + (t2.tv_nsec - t1.tv_nsec) / 1e9;
-    if (delta_t_s <= 0) {
-        printf("0.0\n");
-        return 0;
-    }
-
-    double watts = (delta_e_uj / 1e6) / delta_t_s;
-    printf("%.1f\n", watts);
+    printf("%lld\n%ld\n", (long long)now.tv_sec * 1000000000LL + now.tv_nsec, cpu);
+    long ram = has_dram ? read_energy(dram_energy) : -1;
+    if (ram >= 0) printf("%ld\n%.1f\n", ram, dram_limit(dram));
     return 0;
 }

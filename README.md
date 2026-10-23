@@ -8,10 +8,12 @@ Plugin id: `marionuevo.power` (see `manifest.json`).
 
 Omarchy bar widget for desktops (no battery). The bar shows live CPU package
 power draw (watts, via Intel RAPL) and, on machines with an NVIDIA GPU, live
-GPU board power next to it. Click either for the power-profile picker
-(power-saver / balanced / performance) and session power stats — per-device
-min/avg/max, CPU PL1/PL2 and GPU power cap, and current CPU/GPU frequency
-(with the GPU's P-state).
+GPU board power next to it; where RAPL has a `dram` zone (Haswell desktops
+such as an iMac15,1), RAM power as well. Click any of them for the
+power-profile picker (power-saver / balanced / performance) and session
+power stats — per-device min/avg/max, CPU PL1/PL2, GPU power cap and RAM
+power cap (while one is enabled), and current CPU/GPU frequency (with the
+GPU's P-state).
 
 The GPU half is optional: with no NVIDIA GPU present, `omarchy-gpu-power`
 prints nothing and every GPU element hides itself, leaving the original
@@ -32,8 +34,13 @@ since it's gated on `UPower.displayDevice.isPresent`).
 `Panel.qml` shells out to three commands that must be on `PATH`
 (`~/.local/bin` works):
 
-- `omarchy-cpu-power` — prints instantaneous CPU package power draw in
-  watts. This is a thin wrapper (`scripts/omarchy-cpu-power`) around
+- `omarchy-cpu-power` — prints Intel RAPL's raw energy counters: a
+  monotonic timestamp in ns, then CPU package energy in µJ, then (where RAPL
+  has a `dram` zone, as on Haswell desktops) RAM energy in µJ and the RAM
+  power limit in W. The widget turns two consecutive readings into the
+  average draw over its 2 s poll; a 200 ms sample taken at each poll kept
+  catching the CPU waking up for the bar's own processes and read twice the
+  real figure. This is a thin wrapper (`scripts/omarchy-cpu-power`) around
   `omarchy-cpu-power-helper`, a small compiled binary
   (`scripts/omarchy-cpu-power-helper.c`).
 - `omarchy-cpu-freq` — prints average current CPU frequency in MHz across
