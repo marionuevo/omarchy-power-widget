@@ -114,11 +114,24 @@ Panel {
     return fallback
   }
 
+  // The first of `names` the theme has that no other series uses yet: some
+  // themes give two names one color (Retro 82's blue and magenta).
+  function distinctColor(names, taken, fallback) {
+    for (var i = 0; i < names.length; i++) {
+      var c = themeColors[names[i]]
+      if (c && taken.indexOf(c.toLowerCase()) < 0) return c
+    }
+    return fallback
+  }
+
   // Only the devices this machine has a reading for.
   readonly property var series: {
     var out = [{ key: "cpu", label: "CPU", color: themeColor(["blue", "color4"], "#7aa2f7") }]
     if (gpuPresent) out.push({ key: "gpu", label: "GPU", color: themeColor(["yellow", "color3"], "#e0af68") })
-    if (ramPresent) out.push({ key: "ram", label: "RAM", color: themeColor(["magenta", "color5"], "#ad8ee6") })
+    var taken = out.map(function(x) { return String(x.color).toLowerCase() })
+    if (ramPresent) out.push({ key: "ram", label: "RAM",
+                               color: distinctColor(["magenta", "color5", "cyan", "color6", "green", "color2",
+                                                     "red", "color1"], taken, "#ad8ee6") })
     // The sum of everything, so no device's color: the foreground, dashed.
     if (totalPresent) out.push({ key: "total", label: "Total", dashed: true,
                                  color: root.bar ? root.bar.foreground : Color.foreground })
