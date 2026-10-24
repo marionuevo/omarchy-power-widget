@@ -1,0 +1,20 @@
+#!/bin/bash
+# Prints the whole machine's power draw in watts, e.g. "81.27".
+#
+# Prints nothing at all (exit 0) when there's no reading, so the widget can
+# hide its total instead of showing a broken one. The only source so far is
+# the iMac15,1's imac-fand daemon, which publishes the power supply's DC
+# output (the Apple SMC's PDTR key, root-only) in its status file; a status
+# older than a few seconds means the daemon has stopped.
+
+python3 -I - <<'PY'
+import json, time
+try:
+    status = json.load(open("/run/imac-fan/status.json"))
+except (OSError, ValueError):
+    raise SystemExit
+w = status.get("dcWatts")
+if w is None or time.time() - status.get("time", 0) > 5:
+    raise SystemExit
+print(f"{w:.2f}")
+PY

@@ -58,6 +58,16 @@ Panel {
   property real ramMinWatts: -1
   property real ramMaxWatts: -1
 
+  // ---- Whole-machine power draw (see omarchy-system-power) ----
+  // totalPresent stays false where nothing measures it (anything but an iMac
+  // running imac-fand so far), which hides every total element.
+  property bool totalPresent: false
+  property real totalWatts: 0
+  property real totalSampleCount: 0
+  property real totalSumWatts: 0
+  property real totalMinWatts: -1
+  property real totalMaxWatts: -1
+
   // The previous omarchy-cpu-power reading; watts are the energy spent
   // between it and the next one.
   property var lastEnergy: null
@@ -65,21 +75,22 @@ Panel {
   readonly property real avgWatts: sampleCount > 0 ? sumWatts / sampleCount : 0
   readonly property real ramAvgWatts: ramSampleCount > 0 ? ramSumWatts / ramSampleCount : 0
   readonly property real gpuAvgWatts: gpuSampleCount > 0 ? gpuSumWatts / gpuSampleCount : 0
+  readonly property real totalAvgWatts: totalSampleCount > 0 ? totalSumWatts / totalSampleCount : 0
 
-  // ---- Last two minutes: one {t, cpu, gpu, ram} sample (watts, null where
+  // ---- Last two minutes: one {t, cpu, gpu, ram, total} sample (watts, null where
   //      there is no reading) per CPU poll. Kept while the popup is closed,
   //      so its chart is already full when it opens. ----
   property var history: []
   readonly property int windowMs: 120000
 
   // A new array each time, so bindings on `history` see the change.
-  function record(cpu, gpu, ram) {
+  function record(cpu, gpu, ram, total) {
     var now = Date.now()
     var cutoff = now - windowMs
     var kept = []
     for (var i = 0; i < history.length; i++)
       if (history[i].t >= cutoff) kept.push(history[i])
-    kept.push({ t: now, cpu: cpu, gpu: gpu, ram: ram })
+    kept.push({ t: now, cpu: cpu, gpu: gpu, ram: ram, total: total })
     history = kept
   }
 
@@ -108,6 +119,9 @@ Panel {
     var out = [{ key: "cpu", label: "CPU", color: themeColor(["blue", "color4"], "#7aa2f7") }]
     if (gpuPresent) out.push({ key: "gpu", label: "GPU", color: themeColor(["yellow", "color3"], "#e0af68") })
     if (ramPresent) out.push({ key: "ram", label: "RAM", color: themeColor(["magenta", "color5"], "#ad8ee6") })
+    // The sum of everything, so no device's color: the foreground, dashed.
+    if (totalPresent) out.push({ key: "total", label: "Total", dashed: true,
+                                 color: root.bar ? root.bar.foreground : Color.foreground })
     return out
   }
 
@@ -183,6 +197,7 @@ Panel {
     ctx.lineCap = "round"
     for (var s = 0; s < series.length; s++) {
       ctx.strokeStyle = series[s].color
+      ctx.setLineDash(series[s].dashed ? [5, 4] : [])
       ctx.beginPath()
       var drawing = false
       for (var i = 0; i < history.length; i++) {
@@ -195,6 +210,7 @@ Panel {
       }
       ctx.stroke()
     }
+    ctx.setLineDash([])
 
     if (hoverIndex < 0) return
     var sample = history[hoverIndex]
@@ -250,6 +266,7 @@ Panel {
     if (!powerProc.running) powerProc.running = true
     if (!freqProc.running) freqProc.running = true
     if (!gpuProc.running) gpuProc.running = true
+    if (!totalProc.running) totalProc.running = true
   }
 
   function updateProfiles(raw) {
@@ -308,9 +325,10 @@ Panel {
       if (ramMinWatts < 0 || r < ramMinWatts) ramMinWatts = r
       if (r > ramMaxWatts) ramMaxWatts = r
     }
-    // The GPU is polled by its own process; its latest reading goes with
-    // this one.
-    record(v, gpuPresent && gpuLoaded ? gpuWatts : null, ramOk ? r : null)
+    // The GPU and the total are polled by their own processes; their latest
+    // readings go with this one.
+    record(v, gpuPresent && gpuLoaded ? gpuWatts : null, ramOk ? r : null,
+           totalPresent ? totalWatts : null)
   }
 
   function parseLimits(raw) {
@@ -353,6 +371,18 @@ Panel {
     gpuUtil = isNaN(u) ? -1 : u
   }
 
+  // One number in watts; empty output means nothing measures it.
+  function parseTotal(raw) {
+    var w = parseFloat(String(raw || "").trim())
+    if (isNaN(w) || w <= 0) return
+    totalPresent = true
+    totalWatts = w
+    totalSampleCount += 1
+    totalSumWatts += w
+    if (totalMinWatts < 0 || w < totalMinWatts) totalMinWatts = w
+    if (w > totalMaxWatts) totalMaxWatts = w
+  }
+
   readonly property string tooltipText: {
     if (!loaded) return "CPU power draw\nClick for power modes & stats"
     var t = "CPU: " + watts.toFixed(1) + " W · " + profileLabel(activeProfile)
@@ -361,6 +391,8 @@ Panel {
         (gpuUtil >= 0 ? " · " + gpuUtil.toFixed(0) + "%" : "")
     if (ramPresent)
       t += "\nRAM: " + ramWatts.toFixed(1) + " W" + (ramLimitWatts > 0 ? " · capped at " + ramLimitWatts.toFixed(1) + " W" : "")
+    if (totalPresent)
+      t += "\nTotal: " + totalWatts.toFixed(1) + " W"
     return t + "\nClick for power modes & stats"
   }
 
@@ -420,6 +452,12 @@ Panel {
     id: gpuProc
     command: ["omarchy-gpu-power"]
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.parseGpu(text) }
+  }
+
+  Process {
+    id: totalProc
+    command: ["omarchy-system-power"]
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.parseTotal(text) }
   }
 
   Process {
@@ -488,6 +526,23 @@ Panel {
     Behavior on opacity { enabled: root.alertLevel < 2; NumberAnimation { duration: 200 } }
   }
 
+  // Widest values the pill can show, so the widget keeps a fixed width and
+  // its bar neighbors don't shift as the numbers change: CPU (PL2) and GPU
+  // stay under 1000 W, RAM under 100 W.
+  TextMetrics {
+    id: widestWatts
+    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+    font.pixelSize: Style.font.bodySmall
+    text: "100.0W"
+  }
+
+  TextMetrics {
+    id: widestRamWatts
+    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+    font.pixelSize: Style.font.bodySmall
+    text: "88.8W"
+  }
+
   // Icon+value pairs (CPU, then GPU and RAM where present) in one pill. The outer spacing is wider
   // than the inner so each icon visually binds to its own number instead of
   // the four items reading as one undifferentiated run.
@@ -509,6 +564,8 @@ Panel {
 
       Text {
         anchors.verticalCenter: parent.verticalCenter
+        width: widestWatts.width
+        horizontalAlignment: Text.AlignRight
         text: !root.loaded ? "…" : root.watts.toFixed(1) + "W"
         color: root.bar ? root.bar.foreground : Color.foreground
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -531,6 +588,8 @@ Panel {
 
       Text {
         anchors.verticalCenter: parent.verticalCenter
+        width: widestWatts.width
+        horizontalAlignment: Text.AlignRight
         text: !root.gpuLoaded ? "…" : root.gpuWatts.toFixed(1) + "W"
         color: root.bar ? root.bar.foreground : Color.foreground
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -553,6 +612,8 @@ Panel {
 
       Text {
         anchors.verticalCenter: parent.verticalCenter
+        width: widestRamWatts.width
+        horizontalAlignment: Text.AlignRight
         text: root.ramWatts.toFixed(1) + "W"
         color: root.bar ? root.bar.foreground : Color.foreground
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -841,35 +902,77 @@ Panel {
           }
         }
 
-        // RAM power on its own row. Hidden where RAPL has no dram zone.
-        Column {
+        // RAM and whole-machine power, the same two-cell shape again. Each
+        // hides where there's no reading for it (no RAPL dram zone, nothing
+        // measuring the total).
+        Row {
+          id: ramTotalRow
           width: parent.width
-          spacing: Style.space(2)
-          visible: root.ramPresent
+          spacing: Style.space(10)
+          visible: root.ramPresent || root.totalPresent
 
-          Row {
-            spacing: Style.space(6)
-            Text {
-              anchors.verticalCenter: parent.verticalCenter
-              text: ""
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.title
+          readonly property real cellWidth: (width - spacing) / 2
+
+          Column {
+            width: ramTotalRow.cellWidth
+            spacing: Style.space(2)
+            visible: root.ramPresent
+
+            Row {
+              spacing: Style.space(6)
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: ""
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.title
+              }
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "RAM Power"
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.subtitle
+                font.bold: true
+              }
             }
             Text {
-              anchors.verticalCenter: parent.verticalCenter
-              text: "RAM Power"
+              text: root.ramWatts.toFixed(1) + " W" + (root.ramLimitWatts > 0 ? " · capped at " + root.ramLimitWatts.toFixed(1) + " W" : "")
               color: root.bar.foreground
               font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.subtitle
-              font.bold: true
+              font.pixelSize: Style.font.caption
             }
           }
-          Text {
-            text: root.ramWatts.toFixed(1) + " W" + (root.ramLimitWatts > 0 ? " · capped at " + root.ramLimitWatts.toFixed(1) + " W" : "")
-            color: root.bar.foreground
-            font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.caption
+
+          Column {
+            width: ramTotalRow.cellWidth
+            spacing: Style.space(2)
+            visible: root.totalPresent
+
+            Row {
+              spacing: Style.space(6)
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "󰚥"
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.title
+              }
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Total Power"
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.subtitle
+                font.bold: true
+              }
+            }
+            Text {
+              text: root.totalWatts.toFixed(1) + " W"
+              color: root.bar.foreground
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
           }
         }
 
@@ -885,8 +988,9 @@ Panel {
             width: parent.width
             implicitHeight: legendRow.implicitHeight
 
-            Row {
+            Flow {
               id: legendRow
+              width: parent.width - legendWhen.implicitWidth - Style.space(12)
               spacing: Style.space(12)
 
               Repeater {
@@ -896,12 +1000,25 @@ Panel {
                   required property var modelData
                   spacing: Style.space(5)
 
-                  Rectangle {
+                  Item {
                     width: Style.space(12)
                     height: 2
-                    radius: 1
-                    color: modelData.color
                     anchors.verticalCenter: parent.verticalCenter
+
+                    Rectangle {
+                      width: modelData.dashed ? parent.width * 0.4 : parent.width
+                      height: parent.height
+                      radius: 1
+                      color: modelData.color
+                    }
+                    Rectangle {
+                      visible: modelData.dashed === true
+                      x: parent.width * 0.6
+                      width: parent.width * 0.4
+                      height: parent.height
+                      radius: 1
+                      color: modelData.color
+                    }
                   }
 
                   Text {
@@ -915,8 +1032,9 @@ Panel {
             }
 
             Text {
+              id: legendWhen
               anchors.right: parent.right
-              anchors.verticalCenter: legendRow.verticalCenter
+              anchors.top: parent.top
               text: root.hoverIndex < 0 || root.hoverIndex === root.history.length - 1 ? "now"
                 : Math.round((root.windowEnd() - root.history[root.hoverIndex].t) / 1000) + " s ago"
               color: root.bar.foreground
@@ -1026,7 +1144,7 @@ Panel {
           Row {
             width: parent.width
             spacing: Style.spacing.sm
-            visible: root.gpuPresent || root.ramPresent
+            visible: root.gpuPresent || root.ramPresent || root.totalPresent
             Item { width: sessionTable.labelWidth; height: 1 }
             Text {
               text: "CPU"
@@ -1051,19 +1169,30 @@ Panel {
               width: sessionTable.valueWidth
               visible: root.ramPresent
             }
+            Text {
+              text: "Total"
+              color: sessionTable.mutedForeground
+              font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
+              font.bold: true
+              width: sessionTable.valueWidth
+              visible: root.totalPresent
+            }
           }
 
           Repeater {
             model: [
               { label: "Min", cpu: root.minWatts < 0 ? "—" : root.minWatts.toFixed(1) + " W",
                 gpu: root.gpuMinWatts < 0 ? "—" : root.gpuMinWatts.toFixed(1) + " W",
-                ram: root.ramMinWatts < 0 ? "—" : root.ramMinWatts.toFixed(1) + " W" },
+                ram: root.ramMinWatts < 0 ? "—" : root.ramMinWatts.toFixed(1) + " W",
+                total: root.totalMinWatts < 0 ? "—" : root.totalMinWatts.toFixed(1) + " W" },
               { label: "Avg", cpu: root.sampleCount === 0 ? "—" : root.avgWatts.toFixed(1) + " W",
                 gpu: root.gpuSampleCount === 0 ? "—" : root.gpuAvgWatts.toFixed(1) + " W",
-                ram: root.ramSampleCount === 0 ? "—" : root.ramAvgWatts.toFixed(1) + " W" },
+                ram: root.ramSampleCount === 0 ? "—" : root.ramAvgWatts.toFixed(1) + " W",
+                total: root.totalSampleCount === 0 ? "—" : root.totalAvgWatts.toFixed(1) + " W" },
               { label: "Max", cpu: root.maxWatts < 0 ? "—" : root.maxWatts.toFixed(1) + " W",
                 gpu: root.gpuMaxWatts < 0 ? "—" : root.gpuMaxWatts.toFixed(1) + " W",
-                ram: root.ramMaxWatts < 0 ? "—" : root.ramMaxWatts.toFixed(1) + " W" }
+                ram: root.ramMaxWatts < 0 ? "—" : root.ramMaxWatts.toFixed(1) + " W",
+                total: root.totalMaxWatts < 0 ? "—" : root.totalMaxWatts.toFixed(1) + " W" }
             ]
 
             Row {
@@ -1097,6 +1226,13 @@ Panel {
                 font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
                 width: sessionTable.valueWidth
                 visible: root.ramPresent
+              }
+              Text {
+                text: sessionRow.modelData.total
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall
+                width: sessionTable.valueWidth
+                visible: root.totalPresent
               }
             }
           }

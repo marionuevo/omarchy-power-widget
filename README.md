@@ -9,7 +9,9 @@ Plugin id: `marionuevo.power` (see `manifest.json`).
 Omarchy bar widget for desktops (no battery). The bar shows live CPU package
 power draw (watts, via Intel RAPL) and, on machines with an NVIDIA GPU (or an
 iMac15,1 running `imac-fand`, see below), live GPU power next to it; where RAPL has a `dram` zone (Haswell desktops
-such as an iMac15,1), RAM power as well. Click any of them for the
+such as an iMac15,1), RAM power as well. On that iMac the popup also shows
+the whole machine's draw (the power supply's DC output), dashed in the
+chart. Click any of them for the
 power-profile picker (power-saver / balanced / performance), a chart of the
 last two minutes of power per device (the theme's colors; hover it for the
 readings at any moment, kept while the popup is closed) and session power
@@ -29,11 +31,11 @@ Cloned from the built-in `omarchy.power` panel and stripped of everything
 battery-specific (it hides itself entirely on hardware with no battery,
 since it's gated on `UPower.displayDevice.isPresent`).
 
-![Popup: power-profile picker on top, CPU, GPU and RAM power/frequency, a chart of the last two minutes, session stats and limits below](screenshot.png)
+![Popup: power-profile picker on top, CPU, GPU, RAM and total power, a chart of the last two minutes with the total dashed, session stats and limits below](screenshot.png)
 
 ## Runtime dependencies
 
-`Panel.qml` shells out to three commands that must be on `PATH`
+`Panel.qml` shells out to four commands that must be on `PATH`
 (`~/.local/bin` works):
 
 - `omarchy-cpu-power` — prints Intel RAPL's raw energy counters: a
@@ -59,6 +61,11 @@ since it's gated on `UPower.displayDevice.isPresent`).
   `PGTR`). The clock comes from `amdgpu`'s hwmon; power cap, P-state and
   utilization are left empty and hidden. Prints nothing and exits 0 when
   neither source has a reading, which is what hides the widget's GPU half.
+- `omarchy-system-power` — prints the whole machine's power in watts
+  (`scripts/omarchy-system-power`). Its only source so far is the iMac's
+  `imac-fand`, which publishes the power supply's DC output (SMC key `PDTR`)
+  as `dcWatts`. Prints nothing when there's no reading, which hides every
+  total element.
 
 ### Why a compiled helper for power draw
 
@@ -75,8 +82,8 @@ mechanism `btop` uses for its own CPU-watts display.
 ```sh
 cc -O2 -o ~/.local/bin/omarchy-cpu-power-helper scripts/omarchy-cpu-power-helper.c
 sudo setcap cap_dac_read_search=ep ~/.local/bin/omarchy-cpu-power-helper
-cp scripts/omarchy-cpu-power scripts/omarchy-cpu-freq scripts/omarchy-gpu-power ~/.local/bin/
-chmod +x ~/.local/bin/omarchy-cpu-power ~/.local/bin/omarchy-cpu-freq ~/.local/bin/omarchy-gpu-power
+cp scripts/omarchy-cpu-power scripts/omarchy-cpu-freq scripts/omarchy-gpu-power scripts/omarchy-system-power ~/.local/bin/
+chmod +x ~/.local/bin/omarchy-cpu-power ~/.local/bin/omarchy-cpu-freq ~/.local/bin/omarchy-gpu-power ~/.local/bin/omarchy-system-power
 ```
 
 `setcap` is stored as a filesystem extended attribute — it needs to be
