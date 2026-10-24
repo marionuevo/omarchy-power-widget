@@ -543,9 +543,10 @@ Panel {
     text: "88.8W"
   }
 
-  // Icon+value pairs (CPU, then GPU and RAM where present) in one pill. The outer spacing is wider
-  // than the inner so each icon visually binds to its own number instead of
-  // the four items reading as one undifferentiated run.
+  // Icon+value pairs (CPU, then GPU and RAM where present) in one pill, a
+  // hairline between them. The outer spacing is wider than the inner so each
+  // icon visually binds to its own number instead of the items reading as one
+  // undifferentiated run.
   Row {
     id: pillRow
     anchors.centerIn: parent
@@ -574,6 +575,8 @@ Panel {
       }
     }
 
+    Hairline { visible: root.gpuPresent }
+
     Row {
       spacing: Style.space(4)
       visible: root.gpuPresent
@@ -598,6 +601,8 @@ Panel {
       }
     }
 
+    Hairline { visible: root.ramPresent }
+
     Row {
       spacing: Style.space(4)
       visible: root.ramPresent
@@ -621,6 +626,16 @@ Panel {
         renderType: Text.NativeRendering
       }
     }
+  }
+
+  // The line between readings; marionuevo.separator draws a stronger one
+  // between widgets.
+  component Hairline: Rectangle {
+    anchors.verticalCenter: parent ? parent.verticalCenter : undefined
+    width: 1
+    height: Math.round(root.barSize * 0.45)
+    color: root.bar ? root.bar.foreground : Color.foreground
+    opacity: 0.3
   }
 
   MouseArea {
