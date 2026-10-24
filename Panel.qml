@@ -31,8 +31,8 @@ Panel {
   property real pl2Watts: 0
   property real mhz: 0
 
-  // ---- GPU power draw (NVIDIA, via nvidia-smi - see omarchy-gpu-power) ----
-  // gpuPresent stays false on machines with no NVIDIA GPU, which hides every
+  // ---- GPU power draw (nvidia-smi, or the iMac's SMC - see omarchy-gpu-power) ----
+  // gpuPresent stays false on machines with no GPU reading, which hides every
   // GPU element rather than showing a dead "—".
   property bool gpuPresent: false
   property bool gpuLoaded: false
@@ -193,14 +193,15 @@ Panel {
     if (!isNaN(lim) && lim > 0) gpuLimitWatts = lim
     gpuPstate = f[3]
     var u = parseFloat(f[4])
-    if (!isNaN(u)) gpuUtil = u
+    gpuUtil = isNaN(u) ? -1 : u
   }
 
   readonly property string tooltipText: {
     if (!loaded) return "CPU power draw\nClick for power modes & stats"
     var t = "CPU: " + watts.toFixed(1) + " W · " + profileLabel(activeProfile)
     if (gpuPresent && gpuLoaded)
-      t += "\nGPU: " + gpuWatts.toFixed(1) + " W · " + gpuPstate + " · " + gpuUtil.toFixed(0) + "%"
+      t += "\nGPU: " + gpuWatts.toFixed(1) + " W" + (gpuPstate !== "" ? " · " + gpuPstate : "") +
+        (gpuUtil >= 0 ? " · " + gpuUtil.toFixed(0) + "%" : "")
     if (ramPresent)
       t += "\nRAM: " + ramWatts.toFixed(1) + " W" + (ramLimitWatts > 0 ? " · capped at " + ramLimitWatts.toFixed(1) + " W" : "")
     return t + "\nClick for power modes & stats"

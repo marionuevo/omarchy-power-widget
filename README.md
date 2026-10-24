@@ -7,15 +7,15 @@
 Plugin id: `marionuevo.power` (see `manifest.json`).
 
 Omarchy bar widget for desktops (no battery). The bar shows live CPU package
-power draw (watts, via Intel RAPL) and, on machines with an NVIDIA GPU, live
-GPU board power next to it; where RAPL has a `dram` zone (Haswell desktops
+power draw (watts, via Intel RAPL) and, on machines with an NVIDIA GPU (or an
+iMac15,1 running `imac-fand`, see below), live GPU power next to it; where RAPL has a `dram` zone (Haswell desktops
 such as an iMac15,1), RAM power as well. Click any of them for the
 power-profile picker (power-saver / balanced / performance) and session
 power stats — per-device min/avg/max, CPU PL1/PL2, GPU power cap and RAM
 power cap (while one is enabled), and current CPU/GPU frequency (with the
 GPU's P-state).
 
-The GPU half is optional: with no NVIDIA GPU present, `omarchy-gpu-power`
+The GPU half is optional: with no GPU reading available, `omarchy-gpu-power`
 prints nothing and every GPU element hides itself, leaving the original
 CPU-only layout.
 
@@ -49,9 +49,14 @@ since it's gated on `UPower.displayDevice.isPresent`).
 - `omarchy-gpu-power` — prints one CSV line
   (`watts,sm_mhz,limit_watts,pstate,util_percent`) from a single `nvidia-smi`
   query (`scripts/omarchy-gpu-power`). No special privilege needed;
-  `nvidia-smi`'s read-only queries are open to any user. Prints nothing and
-  exits 0 when there is no NVIDIA GPU, which is what hides the widget's GPU
-  half.
+  `nvidia-smi`'s read-only queries are open to any user. Without
+  `nvidia-smi` it falls back to the `gpuWatts` that
+  [`imac-fand`](https://github.com/marionuevo/omarchy-imac-stats) publishes
+  in `/run/imac-fan/status.json`: on the iMac15,1's Southern Islands Radeon
+  `amdgpu` reports no power, but the Apple SMC measures the GPU rail (key
+  `PGTR`). The clock comes from `amdgpu`'s hwmon; power cap, P-state and
+  utilization are left empty and hidden. Prints nothing and exits 0 when
+  neither source has a reading, which is what hides the widget's GPU half.
 
 ### Why a compiled helper for power draw
 

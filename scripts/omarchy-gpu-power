@@ -1,19 +1,42 @@
 #!/bin/bash
-# Prints one CSV line describing the NVIDIA GPU's current power state:
+# Prints one CSV line describing the GPU's current power state:
 #
 #   watts,sm_mhz,limit_watts,pstate,util_percent
 #
 # e.g. "30.02,210,350.00,P8,27"
 #
-# Prints nothing at all (exit 0) when there's no NVIDIA GPU or nvidia-smi
-# isn't installed, so the widget can hide its GPU section instead of showing
+# Prints nothing at all (exit 0) when there's no GPU reading, so the widget can hide its GPU section instead of showing
 # a broken reading. No elevated privilege is needed — nvidia-smi's read-only
 # queries are available to any user.
 #
 # A single query returns every field at once; that keeps this to one process
 # spawn per poll (~50ms) rather than one per metric.
 
-command -v nvidia-smi >/dev/null 2>&1 || exit 0
+# No NVIDIA: on the iMac the imac-fand daemon publishes the Radeon's power
+# (the SMC's GPU rail; amdgpu itself reports none there) in its status file.
+# The core clock comes from amdgpu's hwmon; limit, P-state and utilization
+# are left empty, as this GPU has no reading for them.
+if ! command -v nvidia-smi >/dev/null 2>&1; then
+  python3 -I - <<'PY'
+import glob, json, os, time
+try:
+    status = json.load(open("/run/imac-fan/status.json"))
+except (OSError, ValueError):
+    raise SystemExit
+w = status.get("gpuWatts")
+if w is None or time.time() - status.get("time", 0) > 5:
+    raise SystemExit
+mhz = ""
+for f in glob.glob("/sys/class/hwmon/hwmon*/name"):
+    if open(f).read().strip() == "amdgpu":
+        try:
+            mhz = str(int(open(os.path.dirname(f) + "/freq1_input").read()) // 1000000)
+        except (OSError, ValueError):
+            pass
+print(f"{w:.2f},{mhz},,,")
+PY
+  exit 0
+fi
 
 nvidia-smi \
   --query-gpu=power.draw,clocks.current.sm,power.limit,pstate,utilization.gpu \
