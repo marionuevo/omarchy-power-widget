@@ -66,6 +66,158 @@ Panel {
   readonly property real ramAvgWatts: ramSampleCount > 0 ? ramSumWatts / ramSampleCount : 0
   readonly property real gpuAvgWatts: gpuSampleCount > 0 ? gpuSumWatts / gpuSampleCount : 0
 
+  // ---- Last two minutes: one {t, cpu, gpu, ram} sample (watts, null where
+  //      there is no reading) per CPU poll. Kept while the popup is closed,
+  //      so its chart is already full when it opens. ----
+  property var history: []
+  readonly property int windowMs: 120000
+
+  // A new array each time, so bindings on `history` see the change.
+  function record(cpu, gpu, ram) {
+    var now = Date.now()
+    var cutoff = now - windowMs
+    var kept = []
+    for (var i = 0; i < history.length; i++)
+      if (history[i].t >= cutoff) kept.push(history[i])
+    kept.push({ t: now, cpu: cpu, gpu: gpu, ram: ram })
+    history = kept
+  }
+
+  // Series colors come from the theme's own palette, so they follow theme
+  // switches; the same ones as omarchy-imac-stats' temperature chart.
+  property var themeColors: ({})
+
+  function parseColors(raw) {
+    var out = {}
+    var lines = String(raw || "").split("\n")
+    for (var i = 0; i < lines.length; i++) {
+      var m = lines[i].match(/^\s*([A-Za-z0-9_]+)\s*=\s*["'](#[0-9A-Fa-f]{6})["']/)
+      if (m) out[m[1]] = m[2]
+    }
+    return out
+  }
+
+  function themeColor(names, fallback) {
+    for (var i = 0; i < names.length; i++)
+      if (themeColors[names[i]]) return themeColors[names[i]]
+    return fallback
+  }
+
+  // Only the devices this machine has a reading for.
+  readonly property var series: {
+    var out = [{ key: "cpu", label: "CPU", color: themeColor(["blue", "color4"], "#7aa2f7") }]
+    if (gpuPresent) out.push({ key: "gpu", label: "GPU", color: themeColor(["yellow", "color3"], "#e0af68") })
+    if (ramPresent) out.push({ key: "ram", label: "RAM", color: themeColor(["magenta", "color5"], "#ad8ee6") })
+    return out
+  }
+
+  // Where the pointer is over the plot, 0 (two minutes ago) to 1 (now); -1 off it.
+  property real hoverFrac: -1
+  readonly property int hoverIndex: hoverFrac < 0 ? -1 : nearestSample(hoverFrac)
+  readonly property var shownSample: history.length === 0 ? null
+    : history[hoverIndex >= 0 ? hoverIndex : history.length - 1]
+  readonly property var chartRange: wattRange(history)
+
+  function windowEnd() {
+    return history.length > 0 ? history[history.length - 1].t : Date.now()
+  }
+
+  function nearestSample(frac) {
+    var t = windowEnd() - windowMs * (1 - frac)
+    var best = -1
+    for (var i = 0; i < history.length; i++)
+      if (best < 0 || Math.abs(history[i].t - t) < Math.abs(history[best].t - t)) best = i
+    return best
+  }
+
+  // From 0 W up to a round step above the highest reading, at most five
+  // steps: power has a real zero, unlike a temperature.
+  function wattRange(samples) {
+    var hi = 0
+    for (var i = 0; i < samples.length; i++)
+      for (var j = 0; j < series.length; j++) {
+        var v = samples[i][series[j].key]
+        if (v !== null && v !== undefined) hi = Math.max(hi, v)
+      }
+    var top = Math.max(hi * 1.08, 4)
+    var steps = [1, 2, 5, 10, 20, 25, 50, 100, 200]
+    var step = steps[steps.length - 1]
+    for (var k = 0; k < steps.length; k++)
+      if (top / steps[k] <= 5) { step = steps[k]; break }
+    var max = Math.max(Math.ceil(top / step), 2) * step
+    var ticks = []
+    for (var t = 0; t <= max; t += step) ticks.push(t)
+    return { min: 0, max: max, ticks: ticks }
+  }
+
+  function fmtWatts(v) {
+    return v === null || v === undefined ? "—" : v.toFixed(1) + " W"
+  }
+
+  readonly property real plotPad: Style.space(4)
+
+  function chartY(v, h) {
+    var r = chartRange
+    return h - plotPad - (v - r.min) / (r.max - r.min) * (h - 2 * plotPad)
+  }
+
+  function chartX(t, w) {
+    return w - (windowEnd() - t) / windowMs * w
+  }
+
+  function paintChart(ctx, w, h) {
+    ctx.reset()
+    var fg = root.bar ? root.bar.foreground : Color.foreground
+    ctx.lineWidth = 1
+    ctx.strokeStyle = Qt.rgba(fg.r, fg.g, fg.b, 0.1)
+    for (var g = 0; g < chartRange.ticks.length; g++) {
+      var gy = Math.round(chartY(chartRange.ticks[g], h)) + 0.5
+      ctx.beginPath()
+      ctx.moveTo(0, gy)
+      ctx.lineTo(w, gy)
+      ctx.stroke()
+    }
+
+    ctx.lineWidth = 2
+    ctx.lineJoin = "round"
+    ctx.lineCap = "round"
+    for (var s = 0; s < series.length; s++) {
+      ctx.strokeStyle = series[s].color
+      ctx.beginPath()
+      var drawing = false
+      for (var i = 0; i < history.length; i++) {
+        var v = history[i][series[s].key]
+        if (v === null || v === undefined) { drawing = false; continue }
+        var x = chartX(history[i].t, w), y = chartY(v, h)
+        if (drawing) ctx.lineTo(x, y)
+        else ctx.moveTo(x, y)
+        drawing = true
+      }
+      ctx.stroke()
+    }
+
+    if (hoverIndex < 0) return
+    var sample = history[hoverIndex]
+    var hx = Math.round(chartX(sample.t, w)) + 0.5
+    ctx.lineWidth = 1
+    ctx.strokeStyle = Qt.rgba(fg.r, fg.g, fg.b, 0.35)
+    ctx.beginPath()
+    ctx.moveTo(hx, 0)
+    ctx.lineTo(hx, h)
+    ctx.stroke()
+    ctx.lineWidth = 2
+    ctx.strokeStyle = Color.popups.background
+    for (var d = 0; d < series.length; d++) {
+      var dv = sample[series[d].key]
+      if (dv === null || dv === undefined) continue
+      ctx.fillStyle = series[d].color
+      ctx.beginPath()
+      ctx.arc(hx, chartY(dv, h), 4, 0, 2 * Math.PI)
+      ctx.fill()
+      ctx.stroke()
+    }
+  }
+
   // Alert level, driven purely by proximity to this CPU's own RAPL limits —
   // no color coding (theme colors only). 1 = near sustained limit
   // (outlined), 2 = at/over sustained limit or over boost limit (flashing).
@@ -147,13 +299,18 @@ Panel {
     if (v > maxWatts) maxWatts = v
 
     var r = (now.ram - last.ram) / 1e6 / seconds
-    if (!isFinite(r) || r <= 0) return
-    ramPresent = true
-    ramWatts = r
-    ramSampleCount += 1
-    ramSumWatts += r
-    if (ramMinWatts < 0 || r < ramMinWatts) ramMinWatts = r
-    if (r > ramMaxWatts) ramMaxWatts = r
+    var ramOk = isFinite(r) && r > 0
+    if (ramOk) {
+      ramPresent = true
+      ramWatts = r
+      ramSampleCount += 1
+      ramSumWatts += r
+      if (ramMinWatts < 0 || r < ramMinWatts) ramMinWatts = r
+      if (r > ramMaxWatts) ramMaxWatts = r
+    }
+    // The GPU is polled by its own process; its latest reading goes with
+    // this one.
+    record(v, gpuPresent && gpuLoaded ? gpuWatts : null, ramOk ? r : null)
   }
 
   function parseLimits(raw) {
@@ -223,7 +380,17 @@ Panel {
       var idx = profiles.indexOf(activeProfile)
       profileIndex = idx >= 0 ? idx : 0
       cursorActive = false
+      themeColorsFile.reload()
+    } else {
+      hoverFrac = -1
     }
+  }
+
+  FileView {
+    id: themeColorsFile
+    path: Color.currentThemePath + "/colors.toml"
+    printErrors: false
+    onLoaded: root.themeColors = root.parseColors(text())
   }
 
   Component.onCompleted: {
@@ -706,6 +873,141 @@ Panel {
           }
         }
 
+        // ---------- Last two minutes ----------
+        Column {
+          width: parent.width
+          spacing: Style.space(8)
+
+          PanelSectionHeader { foreground: root.bar.foreground; text: "LAST 2 MINUTES" }
+
+          // The legend carries the numbers: the hovered sample's, or the latest.
+          Item {
+            width: parent.width
+            implicitHeight: legendRow.implicitHeight
+
+            Row {
+              id: legendRow
+              spacing: Style.space(12)
+
+              Repeater {
+                model: root.series
+
+                Row {
+                  required property var modelData
+                  spacing: Style.space(5)
+
+                  Rectangle {
+                    width: Style.space(12)
+                    height: 2
+                    radius: 1
+                    color: modelData.color
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Text {
+                    text: modelData.label + " " + root.fmtWatts(root.shownSample ? root.shownSample[modelData.key] : null)
+                    color: root.bar.foreground
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                  }
+                }
+              }
+            }
+
+            Text {
+              anchors.right: parent.right
+              anchors.verticalCenter: legendRow.verticalCenter
+              text: root.hoverIndex < 0 || root.hoverIndex === root.history.length - 1 ? "now"
+                : Math.round((root.windowEnd() - root.history[root.hoverIndex].t) / 1000) + " s ago"
+              color: root.bar.foreground
+              opacity: 0.45
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          Item {
+            id: chart
+            width: parent.width
+            height: Style.space(110)
+
+            readonly property real axisWidth: Style.space(32)
+
+            Repeater {
+              model: root.chartRange.ticks
+
+              Text {
+                required property var modelData
+                x: 0
+                width: chart.axisWidth - Style.space(6)
+                y: root.chartY(modelData, chart.height) - height / 2
+                horizontalAlignment: Text.AlignRight
+                text: modelData + "W"
+                color: root.bar.foreground
+                opacity: 0.45
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Canvas {
+              id: plot
+              x: chart.axisWidth
+              width: chart.width - chart.axisWidth
+              height: chart.height
+
+              // Anything the picture depends on; a change repaints it.
+              readonly property var inputs: [root.history, root.hoverIndex, root.series, root.opened]
+              onInputsChanged: requestPaint()
+              onWidthChanged: requestPaint()
+              onHeightChanged: requestPaint()
+              onPaint: root.paintChart(getContext("2d"), width, height)
+            }
+
+            MouseArea {
+              anchors.fill: plot
+              hoverEnabled: true
+              onPositionChanged: function(mouse) {
+                root.hoverFrac = Math.max(0, Math.min(1, mouse.x / plot.width))
+              }
+              onExited: root.hoverFrac = -1
+            }
+          }
+
+          Item {
+            width: parent.width
+            implicitHeight: minus2.implicitHeight
+
+            Text {
+              id: minus2
+              x: chart.axisWidth
+              text: "2 min ago"
+              color: root.bar.foreground
+              opacity: 0.45
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              x: chart.axisWidth + (parent.width - chart.axisWidth - width) / 2
+              text: "1 min"
+              color: root.bar.foreground
+              opacity: 0.45
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              anchors.right: parent.right
+              text: "now"
+              color: root.bar.foreground
+              opacity: 0.45
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+        }
+
         // Session min/avg/max as a small table: one row per statistic, one
         // value column per device. The GPU column collapses away when there's
         // no GPU, leaving the original single-column layout.
@@ -818,7 +1120,8 @@ Panel {
             model: [
               { label: "CPU sustained (PL1)", value: root.pl1Watts > 0 ? root.pl1Watts.toFixed(0) + " W" : "—", shown: true },
               { label: "CPU boost (PL2)", value: root.pl2Watts > 0 ? root.pl2Watts.toFixed(0) + " W" : "—", shown: true },
-              { label: "GPU cap", value: root.gpuLimitWatts > 0 ? root.gpuLimitWatts.toFixed(0) + " W" : "—", shown: root.gpuPresent },
+              // nvidia-smi reports one; the iMac's Radeon has none to show.
+              { label: "GPU cap", value: root.gpuLimitWatts.toFixed(0) + " W", shown: root.gpuPresent && root.gpuLimitWatts > 0 },
               // Only while some daemon (imac-fand on an iMac) has it enabled.
               { label: "RAM cap", value: root.ramLimitWatts.toFixed(1) + " W", shown: root.ramLimitWatts > 0 }
             ]

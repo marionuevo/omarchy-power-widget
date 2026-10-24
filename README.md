@@ -10,8 +10,10 @@ Omarchy bar widget for desktops (no battery). The bar shows live CPU package
 power draw (watts, via Intel RAPL) and, on machines with an NVIDIA GPU (or an
 iMac15,1 running `imac-fand`, see below), live GPU power next to it; where RAPL has a `dram` zone (Haswell desktops
 such as an iMac15,1), RAM power as well. Click any of them for the
-power-profile picker (power-saver / balanced / performance) and session
-power stats — per-device min/avg/max, CPU PL1/PL2, GPU power cap and RAM
+power-profile picker (power-saver / balanced / performance), a chart of the
+last two minutes of power per device (the theme's colors; hover it for the
+readings at any moment, kept while the popup is closed) and session power
+stats — per-device min/avg/max, CPU PL1/PL2, GPU power cap and RAM
 power cap (while one is enabled), and current CPU/GPU frequency (with the
 GPU's P-state).
 
@@ -27,7 +29,7 @@ Cloned from the built-in `omarchy.power` panel and stripped of everything
 battery-specific (it hides itself entirely on hardware with no battery,
 since it's gated on `UPower.displayDevice.isPresent`).
 
-![Popup: power-profile picker on top, CPU and GPU power/frequency and session stats below](screenshot.png)
+![Popup: power-profile picker on top, CPU, GPU and RAM power/frequency, a chart of the last two minutes, session stats and limits below](screenshot.png)
 
 ## Runtime dependencies
 
